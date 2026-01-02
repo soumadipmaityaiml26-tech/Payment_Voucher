@@ -1,8 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import AddVendorModal from "@/components/AddVendorModal";
-import type { VendorFormData } from "@/components/AddVendorModal";
 import VendorDetail from "./VendorDetails";
 import {
   Table,
@@ -22,15 +21,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { toast } from "sonner";
 
-export type Vendor = {
-  id: string;
-  name: string;
-  phone: string;
-  address: string;
-  pan: string;
-  gstin?: string;
-};
+import type {
+  CreateVendorPayload,
+  IGetVendorsResponse,
+  Vendor,
+} from "@/types/vendorTypes";
+import { createVendor, getAllVendors, deleteVendor } from "@/api/vendor";
 
 export default function Vendors() {
   const [open, setOpen] = useState(false);
@@ -38,28 +36,65 @@ export default function Vendors() {
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [selectedVendor, setSelectedVendor] = useState<Vendor | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const handleDelete = () => {
+  const [loading, setLoading] = useState(false);
+
+  /* ================= Load Vendors ================= */
+
+  const fetchVendors = async () => {
+    try {
+      setLoading(true);
+      const data: IGetVendorsResponse = await getAllVendors();
+      setVendors(data.vendors);
+    } catch {
+      toast.error("Failed to load vendors");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchVendors();
+  }, []);
+
+  /* ================= Create Vendor ================= */
+
+  const handleCreateVendor = async (data: CreateVendorPayload) => {
+    try {
+      await createVendor(data);
+      toast.success("Vendor created");
+      fetchVendors();
+    } catch {
+      toast.error("Failed to create vendor");
+    }
+  };
+
+  /* ================= Delete Vendor ================= */
+
+  const handleDelete = async () => {
     if (!deleteId) return;
 
-    setVendors((prev) => prev.filter((v) => v.id !== deleteId));
-    setDeleteId(null);
+    try {
+      await deleteVendor(deleteId);
+
+      // Optimistic UI
+      setVendors((prev) => prev.filter((v) => v._id !== deleteId));
+      toast.success("Vendor deleted");
+    } catch {
+      toast.error("Delete failed");
+    } finally {
+      setDeleteId(null);
+    }
   };
 
-  const handleCreateVendor = (data: VendorFormData) => {
-    setVendors((prev) => [
-      ...prev,
-      {
-        id: Date.now().toString(),
-        ...data,
-      },
-    ]);
-  };
+  /* ================= Search ================= */
 
   const filteredVendors = vendors.filter((v) =>
     `${v.name} ${v.pan} ${v.gstin || ""}`
       .toLowerCase()
       .includes(search.toLowerCase())
   );
+
+  /* ================= Project View ================= */
 
   if (selectedVendor) {
     return (
@@ -71,6 +106,8 @@ export default function Vendors() {
       </div>
     );
   }
+
+  /* ================= UI ================= */
 
   return (
     <div className="p-4 sm:p-6 space-y-4">
@@ -93,24 +130,42 @@ export default function Vendors() {
         className="w-full"
       />
 
-      {/* Table */}
-      <div className="border rounded-lg overflow-x-auto">
-        <div className="border rounded-xl bg-white shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
-            <Table className="min-w-full">
-              <TableHeader className="bg-muted sticky top-0 z-10">
-                <TableRow>
-                  <TableHead>Vendor</TableHead>
-                  <TableHead className="hidden md:table-cell">Phone</TableHead>
-                  <TableHead>PAN</TableHead>
-                  <TableHead className="hidden sm:table-cell">GSTIN</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
+      {/* Vendors Table */}
+      <div className="border rounded-xl bg-white shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <Table className="min-w-full">
+            <TableHeader className="bg-muted sticky top-0 z-10">
+              <TableRow>
+                <TableHead>Vendor</TableHead>
+                <TableHead className="hidden md:table-cell">Phone</TableHead>
+                <TableHead>PAN</TableHead>
+                <TableHead className="hidden sm:table-cell">GSTIN</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
 
-              <TableBody>
-                {filteredVendors.map((v) => (
-                  <TableRow key={v.id} className="hover:bg-muted/40 transition">
+            <TableBody>
+              {loading ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center py-10">
+                    Loading vendors…
+                  </TableCell>
+                </TableRow>
+              ) : filteredVendors.length === 0 ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={5}
+                    className="text-center py-10 text-muted-foreground"
+                  >
+                    No vendors found
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filteredVendors.map((v) => (
+                  <TableRow
+                    key={v._id}
+                    className="hover:bg-muted/40 transition"
+                  >
                     {/* Vendor */}
                     <TableCell className="flex items-center gap-3">
                       <div className="h-9 w-9 rounded-full bg-primary/10 text-primary font-semibold flex items-center justify-center">
@@ -151,36 +206,27 @@ export default function Vendors() {
                       <Button
                         size="sm"
                         variant="destructive"
-                        onClick={() => setDeleteId(v.id)}
+                        onClick={() => setDeleteId(v._id)}
                       >
                         Delete
                       </Button>
                     </TableCell>
                   </TableRow>
-                ))}
-
-                {filteredVendors.length === 0 && (
-                  <TableRow>
-                    <TableCell
-                      colSpan={5}
-                      className="text-center py-10 text-muted-foreground"
-                    >
-                      No vendors found
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </div>
+                ))
+              )}
+            </TableBody>
+          </Table>
         </div>
       </div>
 
+      {/* Delete Confirmation */}
       <AlertDialog open={!!deleteId} onOpenChange={() => setDeleteId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Vendor?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently remove this vendor and all linked projects.
+              This will permanently remove the vendor and all linked projects,
+              bills and payments.
             </AlertDialogDescription>
           </AlertDialogHeader>
 
@@ -191,6 +237,7 @@ export default function Vendors() {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* Add Vendor Modal */}
       <AddVendorModal
         open={open}
         onClose={() => setOpen(false)}

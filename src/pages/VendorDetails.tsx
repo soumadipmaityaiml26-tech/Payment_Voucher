@@ -1,17 +1,29 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { ArrowLeft, Plus } from "lucide-react";
-import type { Vendor } from "./Vendor";
-import AddProjectModal from "@/components/AddProjectModal";
-import ProjectLedger from "./ProjectLedger";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { ArrowLeft, Plus, Eye, Trash2 } from "lucide-react";
 
-interface Project {
-  id: string;
-  name: string;
-  billed: number;
-  paid: number;
-}
+import AddProjectModal, {
+  type CompanyName,
+} from "@/components/AddProjectModal";
+import ProjectLedger from "./ProjectLedger";
+import type { Vendor } from "@/types/vendorTypes";
+import type { Project } from "@/types/projectType";
+import {
+  createProject,
+  getAllVendorProjects,
+  deleteProject,
+} from "@/api/vendor";
 
 interface Props {
   vendor: Vendor;
@@ -21,15 +33,68 @@ interface Props {
 export default function VendorDetail({ vendor, onBack }: Props) {
   const [open, setOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
 
-  const [projects, setProjects] = useState<Project[]>([
-    {
-      id: "1",
-      name: "Skyline Towers",
-      billed: 128000,
-      paid: 64000,
-    },
-  ]);
+  /* ================= Load Projects ================= */
+
+  useEffect(() => {
+    if (!selectedProject) {
+      loadProjects();
+    }
+  }, [vendor._id, selectedProject]);
+
+  const loadProjects = async () => {
+    try {
+      setLoading(true);
+      const data = await getAllVendorProjects(vendor._id);
+      setProjects(data.projects);
+    } catch (err) {
+      console.error("Failed to load projects", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /* ================= Create Project ================= */
+
+  const handleCreateProject = async (
+    projectName: string,
+    companyName: CompanyName,
+    estimatedPrice: Number
+  ) => {
+    try {
+      await createProject({
+        vendorId: vendor._id,
+        projectName,
+        companyName,
+        estimated: estimatedPrice,
+      });
+      loadProjects();
+    } catch (err) {
+      console.error("Create project failed", err);
+    }
+  };
+
+  /* ================= Delete Project ================= */
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+
+    try {
+      await deleteProject(deleteTarget._id);
+
+      // Optimistic UI
+      setProjects((prev) => prev.filter((p) => p._id !== deleteTarget._id));
+    } catch (err) {
+      console.error("Delete project failed", err);
+    } finally {
+      setDeleteTarget(null);
+    }
+  };
+
+  /* ================= Ledger View ================= */
 
   if (selectedProject) {
     return (
@@ -41,16 +106,13 @@ export default function VendorDetail({ vendor, onBack }: Props) {
     );
   }
 
-  const handleCreateProject = (name: string) => {
-    setProjects((prev) => [
-      ...prev,
-      { id: Date.now().toString(), name, billed: 0, paid: 0 },
-    ]);
-  };
+  /* ================= Totals ================= */
 
   const totalBilled = projects.reduce((s, p) => s + p.billed, 0);
   const totalPaid = projects.reduce((s, p) => s + p.paid, 0);
   const totalBalance = totalBilled - totalPaid;
+
+  /* ================= UI ================= */
 
   return (
     <div className="bg-muted/30 min-h-screen space-y-4">
@@ -89,49 +151,84 @@ export default function VendorDetail({ vendor, onBack }: Props) {
         </div>
       </div>
 
-      {/* Projects */}
+      {/* Projects Grid */}
       <div className="px-3 sm:px-6 pb-6">
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-          {projects.map((p) => {
-            const balance = p.billed - p.paid;
+        {loading ? (
+          <div className="text-center py-10 text-muted-foreground">
+            Loading projects…
+          </div>
+        ) : projects.length === 0 ? (
+          <div className="text-center py-10 text-muted-foreground">
+            No projects yet. Click <b>Add Project</b> to create one.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+            {projects.map((p) => {
+              const balance = p.billed - p.paid;
 
-            return (
-              <Card
-                key={p.id}
-                onClick={() => setSelectedProject(p)}
-                className="cursor-pointer hover:shadow-md transition"
-              >
-                <CardContent className="p-5 space-y-4">
-                  <div className="flex justify-between">
-                    <div className="font-semibold">{p.name}</div>
-                    <div className="text-muted-foreground">›</div>
-                  </div>
-
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Billed</span>
-                      <span>₹ {p.billed.toLocaleString("en-IN")}</span>
+              return (
+                <Card
+                  key={p._id}
+                  className="hover:shadow-md transition flex flex-col"
+                >
+                  <CardContent className="p-5 flex flex-col h-full">
+                    {/* Header */}
+                    <div className="flex justify-between items-center mb-3">
+                      <div className="font-semibold text-base">
+                        {p.projectName}
+                      </div>
                     </div>
 
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Paid</span>
-                      <span className="text-green-600">
-                        ₹ {p.paid.toLocaleString("en-IN")}
-                      </span>
+                    {/* Stats */}
+                    <div className="space-y-2 text-sm flex-1">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Billed</span>
+                        <span>₹ {p.billed.toLocaleString("en-IN")}</span>
+                      </div>
+
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Paid</span>
+                        <span className="text-green-600">
+                          ₹ {p.paid.toLocaleString("en-IN")}
+                        </span>
+                      </div>
+
+                      <div className="flex justify-between border-t pt-2 font-semibold">
+                        <span>Balance</span>
+                        <span className="text-red-600">
+                          ₹ {balance.toLocaleString("en-IN")}
+                        </span>
+                      </div>
                     </div>
 
-                    <div className="flex justify-between border-t pt-2 font-semibold">
-                      <span>Balance</span>
-                      <span className="text-red-600">
-                        ₹ {balance.toLocaleString("en-IN")}
-                      </span>
+                    {/* Action Buttons */}
+                    <div className="flex gap-3 mt-4 pt-4 border-t">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1 flex items-center gap-2"
+                        onClick={() => setSelectedProject(p)}
+                      >
+                        <Eye className="w-4 h-4" />
+                        View
+                      </Button>
+
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        className="flex-1 flex items-center gap-2"
+                        onClick={() => setDeleteTarget(p)}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        Delete
+                      </Button>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Add Project Modal */}
@@ -140,6 +237,29 @@ export default function VendorDetail({ vendor, onBack }: Props) {
         onClose={() => setOpen(false)}
         onCreate={handleCreateProject}
       />
+
+      {/* Delete Confirmation */}
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={() => setDeleteTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Project?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently remove <b>{deleteTarget?.projectName}</b>{" "}
+              and all its bills & payments.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete}>
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

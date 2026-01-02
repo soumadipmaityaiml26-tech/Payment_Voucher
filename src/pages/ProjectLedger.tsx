@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -8,50 +8,50 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Plus, CreditCard } from "lucide-react";
+import { ArrowLeft, Plus, CreditCard, Trash2, Download } from "lucide-react";
+import type { Project } from "@/types/projectType";
+import type { Bill } from "@/types/billType";
+import type { Payment } from "@/types/paymentType";
+import { createBill, getBills, deleteBill, deletePayment } from "@/api/vendor";
+import { createPayment, getPayments } from "@/api/vendor";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
+import { Receipt } from "lucide-react";
 
-/* ================================
-   Types
-================================ */
-
-interface Bill {
-  id: string;
-  description: string;
-  amount: number;
-  date: string;
-}
-
-interface Payment {
-  id: string;
-  amount: number;
-  date: string;
-  mode: string;
-}
-
-interface Props {
-  vendor: { name: string };
-  project: {
-    name: string;
-    billed: number;
-    paid: number;
-    contractValue?: number;
-  };
-  onBack: () => void;
-}
-
-/* ================================
-   Utils
-================================ */
+/* ================= Utils ================= */
 
 const formatMoney = (n: number) =>
   `₹ ${n.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
 
-/* ================================
-   Component
-================================ */
+const formatMoneyy = (n: Number) =>
+  `₹ ${n.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
+
+/* ================= Types ================= */
+
+type PayItem = {
+  description: string;
+  amount: number;
+};
+
+/* ================= Props ================= */
+
+interface Props {
+  vendor: { name: string };
+  project: Project;
+  onBack: () => void;
+}
+
+/* ================= Component ================= */
 
 export default function ProjectLedger({ vendor, project, onBack }: Props) {
-  const [tab, setTab] = useState<"bills" | "payments">("bills");
+  const [paymentMode, setPaymentMode] = useState<
+    "Bank Transfer" | "Cheque" | "UPI" | "Cash" | "Demand Draft" | "Others"
+  >("Cash");
+
+  const [bankName, setBankName] = useState("");
+  const [chequeNumber, setChequeNumber] = useState("");
 
   const [bills, setBills] = useState<Bill[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
@@ -62,66 +62,175 @@ export default function ProjectLedger({ vendor, project, onBack }: Props) {
   const [billDesc, setBillDesc] = useState("");
   const [billAmount, setBillAmount] = useState("");
 
-  const [payAmount, setPayAmount] = useState("");
-  const [payMode, setPayMode] = useState("Cash");
+  const [payItems, setPayItems] = useState<PayItem[]>([
+    { description: "", amount: 0 },
+  ]);
+  const [gstPercent, setGstPercent] = useState(0);
 
-  const billed = bills.reduce((s, b) => s + b.amount, project.billed);
-  const paid = payments.reduce((s, p) => s + p.amount, project.paid);
+  /* ================= Load Ledger ================= */
+
+  useEffect(() => {
+    loadLedger();
+  }, [project._id]);
+
+  const loadLedger = async () => {
+    try {
+      const [billRes, paymentRes] = await Promise.all([
+        getBills(project._id),
+        getPayments(project._id),
+      ]);
+
+      setBills(billRes.bills);
+      setPayments(paymentRes.payments);
+    } catch (err) {
+      console.error("Ledger load failed", err);
+    }
+  };
+
+  /* ================= Totals ================= */
+
+  const billed = bills.reduce((s, b) => s + b.amount, 0);
+  const paid = payments.reduce((s, p) => s + p.total, 0);
   const balance = billed - paid;
-  const contractValue = project.contractValue || 5000000;
+  const estimated = project.estimated;
 
-  /* ================= ADD BILL ================= */
-  const addBill = () => {
+  const validItems = payItems.filter(
+    (i) => i.description.trim() && i.amount > 0
+  );
+
+  const itemsTotal = validItems.reduce((s, i) => s + i.amount, 0);
+
+  const gstAmount = (itemsTotal * gstPercent) / 100;
+  const grandTotal = itemsTotal;
+
+  /* ================= Bill ================= */
+
+  const addBill = async () => {
     if (!billDesc || !billAmount) return;
 
-    setBills((prev) => [
-      ...prev,
-      {
-        id: Date.now().toString(),
+    try {
+      await createBill({
+        projectId: project._id,
         description: billDesc,
         amount: Number(billAmount),
-        date: new Date().toISOString(),
-      },
-    ]);
+      });
 
-    setBillDesc("");
-    setBillAmount("");
-    setOpenBill(false);
+      await loadLedger();
+      setBillDesc("");
+      setBillAmount("");
+      setOpenBill(false);
+    } catch (err) {
+      console.error("Create bill failed", err);
+    }
   };
 
-  /* ================= ADD PAYMENT ================= */
-  const addPayment = () => {
-    if (!payAmount) return;
+  /* ================= Payment ================= */
 
-    setPayments((prev) => [
-      ...prev,
-      {
-        id: Date.now().toString(),
-        amount: Number(payAmount),
-        mode: payMode,
-        date: new Date().toISOString(),
-      },
-    ]);
+  const addPayment = async () => {
+    if (validItems.length === 0) return;
+    if (!paymentMode) return;
 
-    setPayAmount("");
-    setPayMode("Cash");
-    setOpenPayment(false);
+    if (paymentMode === "Cheque") {
+      if (!bankName || !chequeNumber) {
+        alert("Bank Name and Cheque Number are required for Cheque payments");
+        return;
+      }
+    }
+
+    try {
+      await createPayment({
+        projectId: project._id,
+        items: validItems,
+        itemsTotal,
+        gst: {
+          percentage: gstPercent,
+          amount: gstAmount,
+        },
+        total: grandTotal,
+
+        paymentSummary: {
+          mode: paymentMode,
+          bankName: paymentMode === "Cheque" ? bankName : null,
+          chequeNumber: paymentMode === "Cheque" ? chequeNumber : null,
+        },
+      });
+
+      await loadLedger();
+
+      // reset
+      setPayItems([{ description: "", amount: 0 }]);
+      setGstPercent(0);
+      setPaymentMode("Cash");
+      setBankName("");
+      setChequeNumber("");
+      setOpenPayment(false);
+    } catch (err) {
+      console.error("Payment failed", err);
+    }
   };
+
+  const formatDate = (iso: string) => iso.split("T")[0];
+  const formatTime = (iso: string) => iso.split("T")[1].slice(0, 5);
+
+  const formatDateTime = (iso: string) =>
+    `${formatDate(iso)} ${formatTime(iso)}`;
+
+  const updatePayItem = (
+    i: number,
+    field: "description" | "amount",
+    value: any
+  ) => {
+    const copy = [...payItems];
+    copy[i][field] = field === "amount" ? Number(value) : value;
+    setPayItems(copy);
+  };
+
+  const addPayItem = () => {
+    setPayItems([...payItems, { description: "", amount: 0 }]);
+  };
+
+  const removePayItem = (i: number) => {
+    setPayItems(payItems.filter((_, idx) => idx !== i));
+  };
+
+  const handleDeleteBill = async (billId: string) => {
+    try {
+      await deleteBill(billId);
+      await loadLedger();
+    } catch (err) {
+      console.error("Delete bill failed", err);
+    }
+  };
+
+  const handleDeletePayment = async (paymentId: string) => {
+    try {
+      await deletePayment(paymentId);
+      await loadLedger();
+    } catch (err) {
+      console.error("Delete payment failed", err);
+    }
+  };
+
+  /* ================= UI ================= */
 
   return (
-    <div className="min-h-screen bg-muted/30 px-4 sm:px-6 py-6 space-y-6">
-      {/* ================= HEADER ================= */}
+    <div className="min-h-screen bg-muted/30 p-6 space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <div className="text-sm text-muted-foreground flex items-center gap-2">
-            <ArrowLeft className="w-4 h-4 cursor-pointer" onClick={onBack} />
-            {vendor.name} /{" "}
-            <span className="font-semibold">{project.name}</span>
-          </div>
-          <h1 className="text-2xl font-bold">Project Ledger</h1>
+        {/* Left side — breadcrumb */}
+        <div className="flex items-center gap-3 text-sm text-muted-foreground">
+          <ArrowLeft
+            className="w-4 h-4 cursor-pointer hover:text-black"
+            onClick={onBack}
+          />
+          <span>{vendor.name}</span>
+          <span className="opacity-50">/</span>
+          <span className="font-semibold text-black">
+            {project.projectName}
+          </span>
         </div>
 
-        <div className="flex gap-3">
+        {/* Right side — balance + actions */}
+        <div className="flex items-center gap-6">
           <div className="text-right">
             <div className="text-xs text-muted-foreground">PROJECT BALANCE</div>
             <div
@@ -133,75 +242,169 @@ export default function ProjectLedger({ vendor, project, onBack }: Props) {
             </div>
           </div>
 
-          <Button variant="outline" size="sm" onClick={() => setOpenBill(true)}>
-            <Plus className="w-4 h-4 mr-1" /> Add Bill
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setOpenBill(true)}
+            >
+              <Plus className="w-4 h-4 mr-1" />
+              Add Bill
+            </Button>
 
-          <Button size="sm" onClick={() => setOpenPayment(true)}>
-            <CreditCard className="w-4 h-4 mr-1" /> Pay
-          </Button>
+            <Button size="sm" onClick={() => setOpenPayment(true)}>
+              <CreditCard className="w-4 h-4 mr-1" />
+              Pay
+            </Button>
+          </div>
         </div>
       </div>
 
-      {/* ================= SUMMARY ================= */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <Summary title="Project Billed" value={formatMoney(billed)} />
-        <Summary title="Project Paid" value={formatMoney(paid)} green />
-        <Summary
-          title="Project Balance"
-          value={formatMoney(balance)}
-          danger={balance > 0}
-        />
-        <Summary title="Contract Value" value={formatMoney(contractValue)} />
+      <div className="grid grid-cols-4 gap-4">
+        <Summary title="Billed" value={formatMoney(billed)} />
+        <Summary title="Paid" value={formatMoney(paid)} green />
+        <Summary title="Balance" value={formatMoney(balance)} danger />
+        <Summary title="Expected Price" value={formatMoneyy(estimated)} />
       </div>
 
-      {/* ================= TABS ================= */}
-      <div className="flex gap-6 border-b text-sm">
-        {["bills", "payments"].map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t as any)}
-            className={`pb-2 ${
-              tab === t
-                ? "border-b-2 border-green-600 text-green-600"
-                : "text-muted-foreground"
-            }`}
-          >
-            {t === "bills" ? "Bills History" : "Payment History"}
-          </button>
-        ))}
-      </div>
+      <Tabs defaultValue="bills" className="w-full">
+        <TabsList className="grid grid-cols-2 w-full mb-4">
+          <TabsTrigger value="bills" className="flex items-center gap-2">
+            <Receipt className="h-4 w-4" />
+            Bills
+          </TabsTrigger>
+          <TabsTrigger value="payments" className="flex items-center gap-2">
+            <CreditCard className="h-4 w-4" />
+            Payments
+          </TabsTrigger>
+        </TabsList>
 
-      {/* ================= TABLE ================= */}
-      <div className="bg-white rounded-xl border shadow-sm p-4">
-        {tab === "bills"
-          ? bills.map((b) => (
-              <div key={b.id} className="flex justify-between py-2 border-b">
-                <div>
-                  <div className="font-medium">{b.description}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {new Date(b.date).toLocaleDateString()}
+        {/* ================= BILLS ================= */}
+        <TabsContent value="bills">
+          <Card className="border shadow-sm">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-semibold">
+                Bills Raised
+              </CardTitle>
+            </CardHeader>
+
+            <CardContent className="pt-0">
+              <ScrollArea className="h-[320px] pr-2">
+                {bills.length === 0 && (
+                  <div className="flex items-center justify-center h-[200px] text-sm text-muted-foreground">
+                    No bills created yet
                   </div>
-                </div>
-                <div className="font-semibold">{formatMoney(b.amount)}</div>
-              </div>
-            ))
-          : payments.map((p) => (
-              <div key={p.id} className="flex justify-between py-2 border-b">
-                <div>
-                  <div className="font-medium">{p.mode}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {new Date(p.date).toLocaleDateString()}
-                  </div>
-                </div>
-                <div className="font-semibold text-green-600">
-                  {formatMoney(p.amount)}
-                </div>
-              </div>
-            ))}
-      </div>
+                )}
 
-      {/* ================= ADD BILL MODAL ================= */}
+                <div className="space-y-3">
+                  {bills.map((b) => (
+                    <div
+                      key={b._id}
+                      className="flex items-center justify-between rounded-lg border bg-white px-4 py-3 transition hover:bg-muted/40"
+                    >
+                      {/* Left */}
+                      <div className="space-y-0.5">
+                        <p className="text-sm font-medium">{b.description}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {formatDateTime(b.createdAt)}
+                        </p>
+                      </div>
+
+                      {/* Right */}
+                      <div className="flex items-center gap-3">
+                        <Badge variant="secondary" className="text-sm">
+                          {formatMoney(b.amount)}
+                        </Badge>
+
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="text-destructive hover:bg-destructive/10"
+                          onClick={() => handleDeleteBill(b._id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ================= PAYMENTS ================= */}
+        <TabsContent value="payments">
+          <Card className="border shadow-sm">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-semibold">
+                Payments Made
+              </CardTitle>
+            </CardHeader>
+
+            <CardContent className="pt-0">
+              <ScrollArea className="h-[320px] pr-2">
+                {payments.length === 0 && (
+                  <div className="flex items-center justify-center h-[200px] text-sm text-muted-foreground">
+                    No payments recorded yet
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  {payments.map((p) => (
+                    <div
+                      key={p._id}
+                      className="flex items-center justify-between rounded-lg border bg-white px-4 py-3 transition hover:bg-muted/40"
+                    >
+                      {/* Left */}
+                      <div className="space-y-0.5">
+                        <p className="text-sm font-medium">
+                          {formatDateTime(p.createdAt)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Payment sent
+                        </p>
+                      </div>
+
+                      {/* Right */}
+                      <div className="flex items-center gap-3">
+                        <Badge variant="secondary" className="text-sm">
+                          {formatMoney(p.total)}
+                        </Badge>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1 flex items-center gap-2"
+                          onClick={() => {
+                            window.open(
+                              `/payment/${p._id}`,
+                              "_blank",
+                              "noopener,noreferrer"
+                            );
+                          }}
+                        >
+                          <Download className="h-4 w-4" />
+                        </Button>
+
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="text-destructive hover:bg-destructive/10"
+                          onClick={() => handleDeletePayment(p._id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      {/* Bill Modal */}
       <Dialog open={openBill} onOpenChange={setOpenBill}>
         <DialogContent>
           <DialogHeader>
@@ -213,63 +416,154 @@ export default function ProjectLedger({ vendor, project, onBack }: Props) {
             onChange={(e) => setBillDesc(e.target.value)}
           />
           <Input
-            placeholder="Amount"
             type="number"
+            placeholder="Amount"
             value={billAmount}
             onChange={(e) => setBillAmount(e.target.value)}
           />
           <DialogFooter>
-            <Button onClick={addBill}>Add Bill</Button>
+            <Button onClick={addBill}>Save</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* ================= ADD PAYMENT MODAL ================= */}
-      <Dialog open={openPayment} onOpenChange={setOpenPayment}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add Payment</DialogTitle>
-          </DialogHeader>
-          <Input
-            placeholder="Amount"
-            type="number"
-            value={payAmount}
-            onChange={(e) => setPayAmount(e.target.value)}
-          />
-          <Input
-            placeholder="Payment Mode"
-            value={payMode}
-            onChange={(e) => setPayMode(e.target.value)}
-          />
-          <DialogFooter>
-            <Button onClick={addPayment}>Add Payment</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Payment Modal */}
+      {openPayment && (
+        <Dialog open={openPayment} onOpenChange={setOpenPayment}>
+          <DialogContent className="max-w-xl">
+            {/* ================= HEADER ================= */}
+            <DialogHeader>
+              <DialogTitle className="text-lg font-semibold">
+                Create Payment
+              </DialogTitle>
+            </DialogHeader>
+
+            {/* ================= ITEMS ================= */}
+            <div className="space-y-3">
+              <p className="text-sm font-medium text-muted-foreground">
+                Payment Items
+              </p>
+
+              {payItems.map((item, i) => (
+                <div
+                  key={i}
+                  className="grid grid-cols-[1fr_140px_40px] gap-2 items-center"
+                >
+                  <Input
+                    value={item.description}
+                    onChange={(e) =>
+                      updatePayItem(i, "description", e.target.value)
+                    }
+                    placeholder="Description"
+                  />
+
+                  <Input
+                    type="number"
+                    value={item.amount}
+                    onChange={(e) => updatePayItem(i, "amount", e.target.value)}
+                    placeholder="Amount"
+                  />
+
+                  {payItems.length > 1 && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="text-destructive hover:bg-destructive/10"
+                      onClick={() => removePayItem(i)}
+                    >
+                      ✕
+                    </Button>
+                  )}
+                </div>
+              ))}
+
+              <Button variant="outline" size="sm" onClick={addPayItem}>
+                + Add another item
+              </Button>
+            </div>
+
+            {/* ================= PAYMENT MODE ================= */}
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-muted-foreground">
+                Payment Method
+              </p>
+
+              <select
+                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                value={paymentMode}
+                onChange={(e) => setPaymentMode(e.target.value as any)}
+              >
+                <option value="Cash">Cash</option>
+                <option value="UPI">UPI</option>
+                <option value="Bank Transfer">Bank Transfer</option>
+                <option value="Cheque">Cheque</option>
+                <option value="Demand Draft">Demand Draft</option>
+                <option value="Others">Others</option>
+              </select>
+            </div>
+
+            {/* ================= CHEQUE DETAILS ================= */}
+            {paymentMode === "Cheque" && (
+              <div className="grid grid-cols-2 gap-3 bg-muted/40 p-3 rounded-lg border">
+                <Input
+                  placeholder="Bank Name"
+                  value={bankName}
+                  onChange={(e) => setBankName(e.target.value)}
+                />
+                <Input
+                  placeholder="Cheque Number"
+                  value={chequeNumber}
+                  onChange={(e) => setChequeNumber(e.target.value)}
+                />
+              </div>
+            )}
+
+            {/* ================= GST ================= */}
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-muted-foreground">Tax</p>
+              <Input
+                type="number"
+                placeholder="GST %"
+                value={gstPercent}
+                onChange={(e) => setGstPercent(Number(e.target.value))}
+              />
+            </div>
+
+            {/* ================= TOTALS ================= */}
+            <div className="rounded-lg border bg-muted/40 p-4 text-sm space-y-1">
+              <div className="flex justify-between">
+                <span>Items Total</span>
+                <span>{formatMoney(itemsTotal)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>GST</span>
+                <span>{formatMoney(gstAmount)}</span>
+              </div>
+              <div className="flex justify-between font-semibold text-base pt-1 border-t mt-1">
+                <span>Grand Total</span>
+                <span>{formatMoney(grandTotal)}</span>
+              </div>
+            </div>
+
+            {/* ================= ACTION ================= */}
+            <DialogFooter>
+              <Button className="w-full" onClick={addPayment}>
+                Create Payment
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }
 
-/* ================================
-   Summary Card
-================================ */
-
-function Summary({
-  title,
-  value,
-  green,
-  danger,
-}: {
-  title: string;
-  value: string;
-  green?: boolean;
-  danger?: boolean;
-}) {
+function Summary({ title, value, green, danger }: any) {
   return (
-    <div className="bg-white border rounded-xl p-4 shadow-sm">
+    <div className="bg-white p-4 border rounded-xl">
       <div className="text-xs text-muted-foreground">{title}</div>
       <div
-        className={`text-lg font-bold mt-1 ${
+        className={`text-lg font-bold ${
           green ? "text-green-600" : danger ? "text-red-600" : ""
         }`}
       >

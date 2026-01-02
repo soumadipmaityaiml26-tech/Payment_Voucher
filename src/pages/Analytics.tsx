@@ -1,67 +1,175 @@
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+} from "recharts";
+import { getFinancialData, getSummary } from "@/api/analytics";
+import type { IChart } from "@/types/analyticsTypes";
+
+/* ================= TYPES ================= */
+
+type Stats = {
+  totalPaymentCount: number;
+  totalPayments: number;
+  totalBilled: number;
+};
+
+/* ================= Helpers ================= */
+
+const formatYAxis = (value: number) => {
+  if (value >= 1_00_00_000) return `${(value / 1_00_00_000).toFixed(1)} Cr`;
+  if (value >= 1_00_000) return `${(value / 1_00_000).toFixed(1)} L`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)} K`;
+  return value.toString();
+};
 
 export default function Analytics() {
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [chartRaw, setChartRaw] = useState<IChart[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    try {
+      const [financial, summary] = await Promise.all([
+        getFinancialData(),
+        getSummary(),
+      ]);
+
+      setStats(financial.stats);
+      setChartRaw(summary?.analytics?.last30DaysPayments || []);
+    } catch (err) {
+      console.error("Analytics load failed", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /* ================= Always run hooks ================= */
+
+  const chartData = useMemo(() => {
+    return (chartRaw || []).map((d) => ({
+      date: `${String(d.day).padStart(2, "0")} ${d.month}`,
+      amount: Number(d.price) || 0,
+    }));
+  }, [chartRaw]);
+
+  const maxAmount = useMemo(() => {
+    return chartData.length > 0
+      ? Math.max(...chartData.map((d) => d.amount))
+      : 0;
+  }, [chartData]);
+
+  const totalPayable = useMemo(() => {
+    if (!stats) return 0;
+    return (
+      (Number(stats.totalBilled) || 0) - (Number(stats.totalPayments) || 0)
+    );
+  }, [stats]);
+
+  /* ================= Safe early return ================= */
+
+  if (loading) {
+    return <div className="p-6 text-muted-foreground">Loading analytics…</div>;
+  }
+
+  if (!stats) {
+    return <div className="p-6 text-destructive">Failed to load analytics</div>;
+  }
+
+  /* ================= UI ================= */
+
   return (
     <div className="p-6 space-y-6">
       <h1 className="text-2xl font-bold">Analytics</h1>
 
-      {/* Top Metrics */}
+      {/* KPIs */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card>
-          <CardHeader>
-            <CardTitle>Total Payable</CardTitle>
-          </CardHeader>
-          <CardContent className="text-2xl font-semibold text-red-600">
-            ₹ 12,45,000
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Total Paid</CardTitle>
-          </CardHeader>
-          <CardContent className="text-2xl font-semibold text-green-600">
-            ₹ 8,20,000
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>GST Payable</CardTitle>
-          </CardHeader>
-          <CardContent className="text-2xl font-semibold">
-            ₹ 1,48,500
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Active Vendors</CardTitle>
-          </CardHeader>
-          <CardContent className="text-2xl font-semibold">18</CardContent>
-        </Card>
+        <Metric title="Total Payable" value={totalPayable} color="red" />
+        <Metric title="Total Paid" value={stats.totalPayments} color="green" />
+        <Metric title="Total Billed" value={stats.totalBilled} />
+        <Metric
+          title="Total Payments"
+          value={stats.totalPaymentCount}
+          isCount
+        />
       </div>
 
-      {/* Placeholder sections */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Top Vendors by Outstanding</CardTitle>
-          </CardHeader>
-          <CardContent className="text-muted-foreground">
-            This will show vendors with highest pending payments.
-          </CardContent>
-        </Card>
+      {/* Chart */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Payments Received (Last 30 Days)</CardTitle>
+        </CardHeader>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Monthly Payment Trend</CardTitle>
-          </CardHeader>
-          <CardContent className="text-muted-foreground">
-            Line chart will be added here later.
-          </CardContent>
-        </Card>
-      </div>
+        <CardContent className="h-[320px] sm:h-[380px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" />
+              <YAxis
+                tickFormatter={formatYAxis}
+                domain={[0, Math.ceil(maxAmount * 1.1)]}
+              />
+              <Tooltip
+                formatter={(v) => [
+                  `₹ ${Number(v || 0).toLocaleString("en-IN")}`,
+                  "Amount",
+                ]}
+              />
+              <Line
+                type="monotone"
+                dataKey="amount"
+                strokeWidth={3}
+                dot={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
     </div>
+  );
+}
+
+/* ================= Metric ================= */
+
+function Metric({
+  title,
+  value,
+  color,
+  isCount,
+}: {
+  title: string;
+  value: number;
+  color?: "red" | "green";
+  isCount?: boolean;
+}) {
+  const safe = Number(value) || 0;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm text-muted-foreground">{title}</CardTitle>
+      </CardHeader>
+      <CardContent
+        className={`text-2xl font-bold ${
+          color === "red"
+            ? "text-destructive"
+            : color === "green"
+            ? "text-green-600"
+            : ""
+        }`}
+      >
+        {isCount ? safe : `₹ ${safe.toLocaleString("en-IN")}`}
+      </CardContent>
+    </Card>
   );
 }

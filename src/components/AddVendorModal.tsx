@@ -8,19 +8,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-
-export type VendorFormData = {
-  name: string;
-  phone: string;
-  address: string;
-  pan: string;
-  gstin?: string;
-};
+import type { CreateVendorPayload } from "@/types/vendorTypes";
 
 interface AddVendorModalProps {
   open: boolean;
   onClose: () => void;
-  onCreate: (data: VendorFormData) => void;
+  onCreate: (data: CreateVendorPayload) => void;
 }
 
 export default function AddVendorModal({
@@ -28,7 +21,7 @@ export default function AddVendorModal({
   onClose,
   onCreate,
 }: AddVendorModalProps) {
-  const [form, setForm] = useState<VendorFormData>({
+  const [form, setForm] = useState<CreateVendorPayload>({
     name: "",
     phone: "",
     address: "",
@@ -36,7 +29,7 @@ export default function AddVendorModal({
     gstin: "",
   });
 
-  const handleChange = (key: keyof VendorFormData, value: string) => {
+  const handleChange = (key: keyof CreateVendorPayload, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
